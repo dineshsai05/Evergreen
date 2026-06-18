@@ -60,10 +60,10 @@ design: `EVERGREEN_MARKET_WATCHER.md`). Unit + live-seed + **live controlled-cha
 cascade** all pass: a real Typeform-tier change → judged **material** → convene
 Competitive Analysis → brief; a real Jotform-tier change → **not material** → recorded
 silently, no convene — opposite verdicts grounded in the watchlist, with provenance.
-Remaining bits:
-- **Refinement:** page-diff extracts only the dated heading; extract heading + blurb so
-  the orchestrator sees release detail (e.g. a price cut → also convene Finance).
-- **Deferred more sources:** Google Forms & Tally "what's-new" pages (verify each first);
+Page-diff extracts heading **+ blurb** (heading is the change key; blurb surfaced in
+the observation so a price cut can route to Finance) — done & verified. Remaining bits
+(all optional/deferred):
+- **More sources:** Google Forms & Tally "what's-new" pages (verify each first);
   pricing-page diffing for the `competitor_pricing_change` signal (JS-rendered/noisy).
 - (Metrics is already "real" via its source — real Stripe is a one-line backing swap if
   ever there's a real account. People & Voice needs real customer data a fictional
