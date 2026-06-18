@@ -221,14 +221,24 @@ def _clean_text(html: str) -> str:
     return re.sub(r"\n{2,}", "\n", soup.get_text("\n")).strip()
 
 
-def _page_entries(src: dict, html: str) -> list[str]:
-    """The 'meaningful update region' for a page source. With a pattern, the set of
-    dated release headings (robust to wording/layout noise); else the cleaned text."""
+def _page_extract(src: dict, html: str) -> dict:
+    """The 'meaningful update region' for a page source as {key: detail}. With a
+    pattern, each dated release HEADING maps to the BLURB that follows it: the heading
+    set is the stable change key (robust to wording/layout noise — a blurb edit on an
+    existing release won't false-fire), while the blurb is surfaced in the observation
+    so the orchestrator sees release detail (e.g. a price cut). Without a pattern
+    (e.g. a controlled test page), the whole cleaned text under one key."""
     text = _clean_text(html)
     pat = src.get("pattern")
-    if pat:
-        return sorted(set(re.findall(pat, text)))
-    return [text]  # fallback (e.g. a controlled test page): whole-text diff
+    if not pat:
+        return {"_page": text}
+    matches = list(re.finditer(pat, text))
+    out: dict[str, str] = {}
+    for i, mt in enumerate(matches):
+        nxt = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        blurb = " ".join(s.strip() for s in text[mt.end():nxt].splitlines() if s.strip())
+        out[mt.group(0)] = blurb[:200]
+    return out
 
 
 def parse_rss(xml_text: str) -> list[dict]:
@@ -274,15 +284,24 @@ def process_source(src: dict, prev: dict, fetcher=http_fetch) -> tuple[list[Even
     events: list[Event] = []
 
     if src["type"] == "page":
-        entries = _page_entries(src, res["text"])
-        seeded = prev.get("entries") is not None
-        new_state = {**prev, **meta, "entries": entries}
-        if seeded and entries != prev["entries"]:
-            added = [e for e in entries if e not in prev["entries"]]
-            digest = hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()[:8]
-            obs = f"{src['name']}'s update page changed"
+        cur = _page_extract(src, res["text"])
+        prev_entries = prev.get("entries")
+        new_state = {**prev, **meta, "entries": cur}
+        if prev_entries is None:
+            return [], new_state  # seed silently on first sight
+        if src.get("pattern"):
+            prev_keys = set(prev_entries)  # tolerates old list-format state
+            added = [h for h in cur if h not in prev_keys]
+            changed = set(cur) != prev_keys  # fire on a NEW (or removed) release heading
+        else:
+            added, changed = [], (cur != prev_entries)  # whole-text diff (test pages)
+        if changed:
+            digest = hashlib.sha256(json.dumps(sorted(cur), sort_keys=True).encode()).hexdigest()[:8]
             if added:
-                obs += f"; new entr{'y' if len(added) == 1 else 'ies'}: {', '.join(added)}"
+                detail = "; ".join(f"{h} — {cur[h]}" if cur.get(h) else h for h in added)
+                obs = f"{src['name']}'s update page added: {detail}"
+            else:
+                obs = f"{src['name']}'s update page changed"
             events.append(_make_event(src, obs, digest, [src["url"]]))
         return events, new_state
 
