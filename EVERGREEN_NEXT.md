@@ -201,7 +201,19 @@ handled.
 
 ---
 
-## STEP 2 — Simulated clock + persistence-across-restart
+## STEP 2 — Simulated clock + persistence-across-restart — ✅ DONE (2026-06-18)
+
+> Shipped: `clock/sim_clock.py` (`SimClock` real-secs→sim-days, persisted to
+> `clock/clock_state.json`, fire-once via persisted last-day; `read_current_day()`
+> for stamping). Market Watcher refactored to clock-driven (SCHEDULE by sim-day,
+> quiet days log-only, sim-day stamped on events; run via `-m`). `record_decision`
+> stamps `sim_day`; `recall_decisions` shows "sim-day N · date". Verified live:
+> quiet days → minor (not material) day 3 → material cascade day 12 → full restart
+> preserved memory + resumed sim-day with NO replay. Built sync (stdlib) to fit the
+> send-only REST watcher. Honest boundary: LangGraph `InMemorySaver` (in-flight
+> graph state) does NOT survive restart — durable record does; SQLite checkpointer
+> deferred. Note: at a fast clock the decision's `sim_day` can trail the event's day
+> (cascade spans sim-days) — use a slower clock for a same-day demo.
 
 **Goal:** make the time dimension visible (room idle for "days", then wakes on a
 scheduled day) and prove the room's state survives a full restart. This is the pillar

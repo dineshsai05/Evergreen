@@ -138,10 +138,15 @@ Orchestrator + Competitive Analysis + Market Watcher.
   synthesized decision and escalates to the founder with exactly ONE brief.
 - **Dynamic re-convening** verified: after a first cascade removed both specialists,
   a second material event re-added them from scratch.
-- Event-driven: the Market Watcher autonomously posts events on a clock tick; no more
-  hand-posting events.
+- Event-driven over SIM TIME: the Market Watcher is driven by `clock/sim_clock.py` —
+  it stays quiet for "days" and fires scheduled events on their sim-day (no hand-posting).
 - Founder gets exactly one message per material event (the final brief) — noise,
   intermediate steps, and "still working" status no longer ping the founder.
+- Memory READ path: a founder "why did we decide X?" is answered from
+  `evergreen_memory.jsonl` via `recall_decisions`, with no specialist convened (§Step 1).
+- Persistence across restart: a full kill/restart preserved memory + resumed the
+  sim-day from `clock_state.json` with NO event replay (§Step 2). Caveat: the
+  LangGraph `InMemorySaver` (in-flight graph state) does not persist.
 
 **Finance specialist — FIXED (was BLOCKED, see §8):**
 - Now delivers its grounded answer to the orchestrator reliably. Two changes did it:
@@ -202,7 +207,11 @@ THENVOI_REST_URL=https://app.band.ai
 EVERGREEN_ROOM_ID=<room uuid>
 MARKET_WATCHER_API_KEY=<watcher agent key>
 ORCHESTRATOR_NAME=Orchestrator
-WATCHER_TICK_SECONDS=20
+
+# Simulated clock (clock/sim_clock.py — drives the watcher; read by record_decision)
+SIM_SECONDS_PER_DAY=5
+SIM_START_DAY=1
+# SIM_CLOCK_STATE_FILE=clock/clock_state.json   # default; persisted sim-day
 ```
 LiteLLM's AI/ML provider reads `AIML_API_KEY`; model string is `aiml/<model>`
 (e.g. `aiml/gpt-4o-mini`, `aiml/gpt-4o`). Their chat examples use api_base
@@ -562,11 +571,13 @@ evergreen/
       competitive_analysis.py           # CrewAI persona on _base (works)
       finance.py                        # CrewAI pre-fetched data on _base (works — §8)
     watchers/
-      market_watcher.py                 # standalone REST stub, hardcoded feed
+      market_watcher.py                 # REST, send-only; clock-driven SCHEDULE (§Step 2)
   core/
     company_data.py                     # shared mock "company profile"
     (llm.py / memory.py / events.py)    # scaffolding, mostly empty
-  clock/                                # empty (simulated clock — not built)
+  clock/
+    sim_clock.py                        # SimClock: real secs -> sim-days, persisted
+    clock_state.json                    # persisted sim-day (gitignored, runtime state)
   .env                                  # see §4
   agent_config.yaml                     # per-agent {agent_id, api_key}
   evergreen_memory.jsonl                # memory store (written by record_decision)
@@ -593,8 +604,13 @@ it does not load through the SDK.)
 uv run python -m agents.orchestrator
 uv run python -m agents.specialists.competitive_analysis
 uv run python -m agents.specialists.finance
-uv run python agents/watchers/market_watcher.py
+uv run python -m agents.watchers.market_watcher   # now -m (imports clock.sim_clock)
 ```
+Clock config via env (§4): `SIM_SECONDS_PER_DAY` (default 5), `SIM_START_DAY`
+(default 1). Use a slower clock for a demo (e.g. 15-20s/day) so a material event
+and its decision land on the same sim-day — at a fast clock the multi-LLM cascade
+spans several sim-days, so a decision's `sim_day` (when finalized) can trail the
+event's day. Delete `clock/clock_state.json` to reset the sim-day to the start.
 Specialists are convened on demand — they do NOT need to be pre-added to the room;
 just keep their processes running (siblings auto-discover via lookup_peers) and let
 them CONNECT before any event is posted (gotcha #13). The Orchestrator and the Market
@@ -621,10 +637,13 @@ with a clear **description** (the orchestrator routes by peer description).
 3. ~~**Memory recall tool**~~ — DONE (2026-06-18): `recall_decisions` added to the
    orchestrator; founder "why did we decide X?" answered from `evergreen_memory.jsonl`
    with no specialist convened. Verified live (positive + graceful no-record).
-4. **Simulated clock / event injector** — make long-running behavior visible
-   (the persistence/time pillar). Currently the watcher's tick loop is the stand-in.
-5. **Persistence-across-restart demo** — show the room park and resume with memory
-   intact.
+4. ~~**Simulated clock / event injector**~~ — DONE (2026-06-18): `clock/sim_clock.py`
+   (`SimClock`, persisted sim-day); the Market Watcher is clock-driven (SCHEDULE by
+   sim-day, quiet days, fire-once). Verified live.
+5. ~~**Persistence-across-restart demo**~~ — DONE (2026-06-18): full restart preserved
+   `evergreen_memory.jsonl` + resumed the sim-day from `clock_state.json` with NO
+   event replay. Caveat: LangGraph `InMemorySaver` (in-flight graph state) does NOT
+   persist — durable record does; SQLite checkpointer deferred.
 6. **Real watchers** (later) — swap hardcoded feeds for connector + change-detection
    + relevance filter. Metrics watcher is the cleanest first real one (deterministic,
    no fuzzy relevance): query Stripe/PostHog/DB on a timer, z-score vs a stored
