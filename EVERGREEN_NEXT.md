@@ -281,7 +281,16 @@ pre-restart decision is still recallable.
 
 ---
 
-## STEP 3 — Retention & Hiring specialists
+## STEP 3 — Retention & Hiring specialists — 🟡 CODE DONE, pending Band agents (2026-06-18)
+
+> Shipped: `RETENTION` + `HIRING` slices in `core/company_data.py`;
+> `agents/specialists/retention.py` + `hiring.py` (grounded, pre-fetch+inject on
+> `_base.py`, four-part output, no choose-able tools); orchestrator routing extended
+> to all four specialists with fan-out examples; `agent_config.example.yaml` entries.
+> Unit-verified (snapshots grounded + consistent, adapters build, routing prompt).
+> TO FINISH: create the "Retention" and "Hiring" Band agents (clear descriptions),
+> add their keys to `agent_config.yaml`, run their processes, then live-verify the
+> two routes below.
 
 **Goal:** broaden the specialist pool so the orchestrator's *dynamic convening* shows
 across more expertises (and richer fan-out). Not a pillar gap, but high value for low

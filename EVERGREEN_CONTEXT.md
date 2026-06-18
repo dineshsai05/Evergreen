@@ -107,10 +107,9 @@ Key consequences:
 ### Tier 3 — Specialists (analysts)
 - Convened on demand by the orchestrator. Framework: **CrewAI**. Model: gpt-4o-mini
   (cheaper) for the persona-style ones.
-- **Built & working:** Competitive Analysis (persona) and Finance (pre-fetched data),
-  both on the shared `agents/specialists/_base.py` (forced recipient + prompt fix, §7).
-- **Planned:** Retention, Hiring (a new module = backstory + instructions +
-  `run_specialist(...)` on `_base.py`).
+- **Built & working:** Competitive Analysis (persona) and Finance (pre-fetched data).
+- **Built, pending Band agents:** Retention and Hiring (grounded, pre-fetched).
+- All four on the shared `agents/specialists/_base.py` (forced recipient + prompt fix, §7).
 
 ### Humans & infrastructure
 - Founder (and function heads) are **participants, not agents**. The founder is the
@@ -467,6 +466,19 @@ brief ("MRR drop … ~$15,295 … lose ~$6,555/mo", Starter = 45% of MRR). Trade
 the old tooled version: no per-tool audit events and no dynamic tool selection — for
 four cheap internal slices, worth it for guaranteed delivery.
 
+### Retention (`agents/specialists/retention.py`) — code complete (pending Band agent)
+Same grounded pattern as Finance. `build_retention_snapshot()` pre-fetches the
+`RETENTION` slice (logo/revenue churn, NRR/GRR, per-plan churn, trailing trend,
+at-risk accounts; Starter is the at-risk cohort, ~$983/mo at risk derived from
+PLANS). Four-part output: what's happening / severity / who's exposed / one play.
+
+### Hiring (`agents/specialists/hiring.py`) — code complete (pending Band agent)
+Same pattern. `build_hiring_snapshot()` pre-fetches the `HIRING` slice (headcount
+plan vs actual, attrition, time-to-fill, open reqs with pipeline). Four-part output.
+
+> Retention & Hiring are unit-verified (snapshots, adapters, routing) but need their
+> Band agents created + keys in `agent_config.yaml` before a live run (§11.2).
+
 ### Shared mock data (`core/company_data.py`)
 The "company profile" all specialists read. A fictional SaaS form-builder, internally
 consistent: `PLANS` (Free/Starter/Pro/Business with customers + MRR),
@@ -631,9 +643,10 @@ with a clear **description** (the orchestrator routes by peer description).
 
 1. ~~**Fix Finance delivery** (§8)~~ — DONE (2026-06-18): pre-fetch data + drop tools,
    plus the shared `_base.py` forced-recipient/prompt-suppression layer. Verified live.
-2. **Retention & Hiring specialists** — now trivial: a new module is backstory +
-   instructions + `run_specialist(...)` on `agents/specialists/_base.py` (§7). Add a
-   data snapshot like Finance if it needs grounded numbers.
+2. **Retention & Hiring specialists** — CODE DONE (2026-06-18): both built grounded
+   on `_base.py` with `core/company_data.py` slices + routing/fan-out (§7). PENDING:
+   create the two Band agents (clear descriptions), add keys to `agent_config.yaml`,
+   then live-verify (churn-spike → Retention[+Finance]; departure → Hiring).
 3. ~~**Memory recall tool**~~ — DONE (2026-06-18): `recall_decisions` added to the
    orchestrator; founder "why did we decide X?" answered from `evergreen_memory.jsonl`
    with no specialist convened. Verified live (positive + graceful no-record).
