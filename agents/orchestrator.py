@@ -166,9 +166,11 @@ def recall_decisions(query: str) -> str:
         if len(matched) >= 2 or distinctive:
             matches.append((_score(e, query_tokens), e))
     if not matches:
+        logger.info("recall_decisions query=%r -> no match", query)
         return "No recorded decision matches that."
     # Best overlap first; break ties by recency (latest timestamp first).
     matches.sort(key=lambda pair: (pair[0], pair[1].get("timestamp", "")), reverse=True)
+    logger.info("recall_decisions query=%r -> %d match(es)", query, len(matches))
     lines = []
     for _score_val, e in matches[:5]:
         date = (e.get("timestamp", "") or "")[:10] or "?"
@@ -206,8 +208,11 @@ asking about past reasoning or decisions — e.g. "why did we decide X?", "what
 did we decide about Y?", "why didn't we act on Z?", "have we dealt with this
 before?" — this is a DIRECT QUESTION, not a new event. Do NOT convene a
 specialist and do NOT treat it as something to escalate. Call recall_decisions
-with the key terms from their question, then reply to the founder in 1-3 plain
-sentences using ONLY what it returns. If it returns nothing, tell them you have
+with the key terms from their question, then ANSWER by @mentioning the founder
+with band_send_message — 1-3 plain sentences using ONLY what recall_decisions
+returns. (As with every reply in this room, your answer is delivered ONLY if you
+call band_send_message; plain text you "say" without that tool is discarded.) If
+recall_decisions returns nothing, send a band_send_message telling them you have
 no record of that decision. Answering a direct question is a reply, so the
 once-per-event Founder Rule does not apply here. (If the founder instead raises a
 genuinely NEW development, handle it as an event through the normal loop below.)
