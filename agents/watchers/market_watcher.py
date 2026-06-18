@@ -172,6 +172,22 @@ def _sources() -> list[dict]:
             "url": os.getenv("JOTFORM_FEED_URL", "https://www.jotform.com/blog/feed/"),
             "category": "Product",
         },
+        {
+            # Google Workspace Updates Blogger Atom feed, label-filtered to Google Forms
+            # (inherent relevance — the label feed is Forms-only, so no category filter).
+            "key": "competitor:googleforms", "name": "Google Forms", "tier": "minor", "type": "rss",
+            "url": os.getenv(
+                "GOOGLE_FORMS_FEED_URL",
+                "https://workspaceupdates.googleblog.com/feeds/posts/default/-/Google%20Forms",
+            ),
+        },
+        {
+            "key": "competitor:tally", "name": "Tally", "tier": "minor", "type": "page",
+            "url": os.getenv("TALLY_CHANGELOG_URL", "https://tally.so/changelog"),
+            # dated entry headings ("June 10, 2026 — …") are the change key
+            "pattern": r"(?:January|February|March|April|May|June|July|August|September|"
+                       r"October|November|December)\s+\d{1,2},\s+20\d{2}",
+        },
     ]
 
 
@@ -241,19 +257,40 @@ def _page_extract(src: dict, html: str) -> dict:
     return out
 
 
-def parse_rss(xml_text: str) -> list[dict]:
-    """Parse RSS 2.0 with stdlib ElementTree (no feedparser/lxml dependency)."""
-    items = []
+def _localname(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]  # strip any XML namespace
+
+
+def parse_feed(xml_text: str) -> list[dict]:
+    """Parse RSS 2.0 (<item>) OR Atom (<entry>), namespace-agnostic, with stdlib
+    ElementTree (no feedparser/lxml). Handles RSS <link>text + <guid> and Atom
+    <link rel=alternate href> + <id> + <category term>."""
     root = ET.fromstring(xml_text)
-    for item in root.iter("item"):
-        link = (item.findtext("link") or "").strip()
-        guid = (item.findtext("guid") or link).strip()
-        items.append({
-            "id": guid or link,
-            "title": (item.findtext("title") or "").strip(),
-            "link": link,
-            "categories": [(c.text or "").strip() for c in item.findall("category")],
-        })
+    items = []
+    for el in root.iter():
+        if _localname(el.tag) not in ("item", "entry"):
+            continue
+        title = link = guid = ""
+        cats = []
+        for ch in el:
+            ln = _localname(ch.tag)
+            if ln == "title":
+                title = (ch.text or "").strip()
+            elif ln == "link":
+                href = ch.get("href")  # Atom
+                if href:
+                    if ch.get("rel", "alternate") == "alternate" or not link:
+                        link = href
+                elif ch.text:  # RSS
+                    link = ch.text.strip()
+            elif ln == "guid":
+                guid = (ch.text or "").strip()
+            elif ln == "id" and not guid:  # Atom id
+                guid = (ch.text or "").strip()
+            elif ln == "category":
+                cats.append((ch.get("term") or ch.text or "").strip())
+        items.append({"id": guid or link, "title": title, "link": link,
+                      "categories": [c for c in cats if c]})
     return items
 
 
@@ -306,7 +343,7 @@ def process_source(src: dict, prev: dict, fetcher=http_fetch) -> tuple[list[Even
         return events, new_state
 
     # RSS
-    items = parse_rss(res["text"])
+    items = parse_feed(res["text"])
     cat = src.get("category")
     if cat:
         items = [it for it in items if any(cat.lower() == c.lower() for c in it["categories"])]
