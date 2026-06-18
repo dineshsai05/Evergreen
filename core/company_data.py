@@ -47,3 +47,35 @@ CASH = {
     "monthly_net_burn": 62000,
     "cash_balance": 740000,
 }
+
+# Retention / customer-health slice. Consistent with PLANS: the Starter cohort is
+# the largest by logo count and the cheapest, and it churns hardest — so it's the
+# at-risk segment. Logo churn has crept up over the trailing 6 months.
+RETENTION = {
+    "monthly_logo_churn_pct": 3.2,
+    "monthly_revenue_churn_pct": 2.8,   # gross revenue churn
+    "nrr_pct": 102,                     # expansion offsets churn (net revenue retention)
+    "grr_pct": 96,                      # gross revenue retention
+    "by_plan_monthly_churn_pct": {"Starter": 4.5, "Pro": 1.6, "Business": 0.8},
+    "logo_churn_trailing_6mo_pct": [2.6, 2.8, 2.9, 3.0, 3.1, 3.2],  # oldest -> newest
+    "at_risk_accounts": [
+        {"name": "Northwind Co", "plan": "Pro", "reason": "no logins in 21 days"},
+        {"name": "Acme Forms", "plan": "Business", "reason": "usage down 40% MoM, support tickets up"},
+    ],
+}
+
+# Hiring / org-capacity slice. headcount gap (plan - actual) matches the open reqs.
+HIRING = {
+    "headcount_actual": 18,
+    "headcount_plan": 21,
+    "monthly_attrition_pct": 2.1,
+    "avg_time_to_fill_days": 48,
+    "open_reqs": [
+        {"role": "Senior Backend Engineer", "function": "Engineering",
+         "days_open": 52, "pipeline": {"applied": 40, "screen": 8, "onsite": 3, "offer": 1}},
+        {"role": "Product Designer", "function": "Product",
+         "days_open": 30, "pipeline": {"applied": 25, "screen": 5, "onsite": 2, "offer": 0}},
+        {"role": "Customer Success Lead", "function": "Customer Success",
+         "days_open": 21, "pipeline": {"applied": 18, "screen": 4, "onsite": 1, "offer": 0}},
+    ],
+}

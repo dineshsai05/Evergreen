@@ -15,3 +15,11 @@ competitive_analysis:
 finance:
   agent_id: "<finance agent uuid>"
   api_key: "<finance band agent key>"
+
+retention:
+  agent_id: "<retention agent uuid>"
+  api_key: "<retention band agent key>"
+
+hiring:
+  agent_id: "<hiring agent uuid>"
+  api_key: "<hiring band agent key>"
