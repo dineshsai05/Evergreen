@@ -55,12 +55,14 @@ breadth/polish and the real-watcher upgrade.
 
 ## 🔜 Remaining
 
-**Real Market watcher — DONE** (Typeform page-diff + Jotform RSS; design:
-`EVERGREEN_MARKET_WATCHER.md`). Remaining bits:
-- **Pending: live cascade test** — a *detected* change (controlled page, since we can't
-  make a competitor publish on cue) → orchestrator judges materiality against the
-  watchlist (Typeform major → material → convene; Jotform minor → not) → grounded brief.
-  (Unit + live-seed already pass; this is the with-agents leg.)
+**Real Market watcher — DONE & cascade-verified** (Typeform page-diff + Jotform RSS;
+design: `EVERGREEN_MARKET_WATCHER.md`). Unit + live-seed + **live controlled-change
+cascade** all pass: a real Typeform-tier change → judged **material** → convene
+Competitive Analysis → brief; a real Jotform-tier change → **not material** → recorded
+silently, no convene — opposite verdicts grounded in the watchlist, with provenance.
+Remaining bits:
+- **Refinement:** page-diff extracts only the dated heading; extract heading + blurb so
+  the orchestrator sees release detail (e.g. a price cut → also convene Finance).
 - **Deferred more sources:** Google Forms & Tally "what's-new" pages (verify each first);
   pricing-page diffing for the `competitor_pricing_change` signal (JS-rendered/noisy).
 - (Metrics is already "real" via its source — real Stripe is a one-line backing swap if
