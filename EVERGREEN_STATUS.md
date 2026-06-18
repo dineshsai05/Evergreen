@@ -61,10 +61,12 @@ cascade** all pass: a real Typeform-tier change → judged **material** → conv
 Competitive Analysis → brief; a real Jotform-tier change → **not material** → recorded
 silently, no convene — opposite verdicts grounded in the watchlist, with provenance.
 Page-diff extracts heading **+ blurb** (heading is the change key; blurb surfaced in
-the observation so a price cut can route to Finance) — done & verified. Remaining bits
-(all optional/deferred):
-- **More sources:** Google Forms & Tally "what's-new" pages (verify each first);
-  pricing-page diffing for the `competitor_pricing_change` signal (JS-rendered/noisy).
+the observation so a price cut can route to Finance) — done & verified, incl. a live
+re-run where the priced Typeform release fanned out to Competitive Analysis **+
+Finance**. **All four watchlist competitors now have real sources** (Typeform major
+page-diff; Jotform RSS, Google Forms Atom feed, Tally page-diff — minors); the feed
+parser handles RSS + Atom. Remaining (optional/deferred):
+- **Pricing-page diffing** for the `competitor_pricing_change` signal (JS-rendered/noisy).
 - (Metrics is already "real" via its source — real Stripe is a one-line backing swap if
   ever there's a real account. People & Voice needs real customer data a fictional
   company lacks — deferred.)
