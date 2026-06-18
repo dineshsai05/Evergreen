@@ -21,12 +21,13 @@ from dataclasses import asdict, dataclass, field
 
 @dataclass
 class Event:
-    source: str                 # where the data came from, e.g. "stripe"
+    source: str                 # where the data came from, e.g. "stripe", "competitor:typeform"
     signal_type: str            # stable enum the orchestrator routes on, e.g. "mrr_drop"
     observation: str            # human-readable, FACTUAL only (no severity/recommendation)
-    magnitude: dict             # raw numbers only, e.g. {"metric","prev","now","pct","z",...}
     dedup_key: str              # so the same condition isn't re-fired (e.g. "mrr_drop:day-12")
     sim_day: int                # ties the event to the clock/memory timeline
+    magnitude: dict = field(default_factory=dict)   # raw numbers (metrics); empty for qualitative
+    evidence: list = field(default_factory=list)     # links/ids a specialist can cite, e.g. [url]
     watcher: str = "metrics"    # which watcher family detected it
 
     def to_dict(self) -> dict:
@@ -34,9 +35,10 @@ class Event:
 
     def render(self, orchestrator_name: str = "Orchestrator") -> str:
         """The room post: a readable line (backward-compatible) + a parseable JSON
-        tail. Contains observation + raw magnitude only — never a judgment."""
+        tail. Contains observation + raw magnitude/evidence only — never a judgment."""
         tail = json.dumps(self.to_dict(), separators=(",", ":"))
+        ev = f" ({'; '.join(self.evidence)})" if self.evidence else ""
         return (
             f"@{orchestrator_name} [{self.watcher} · sim-day {self.sim_day}] "
-            f"{self.observation}\n<event>{tail}</event>"
+            f"{self.observation}{ev}\n<event>{tail}</event>"
         )

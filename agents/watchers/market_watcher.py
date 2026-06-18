@@ -2,53 +2,56 @@
 Market Watcher  --  Evergreen
 =============================
 
-A standing, LLM-free detector and the autonomous event source for the room. It is
-driven by the simulated clock (`clock/sim_clock.py`): on each new sim-day it checks
-its SCHEDULE and, if a signal is due that day, POSTs it into the Evergreen room
-@mentioning the Orchestrator. On days with nothing scheduled it stays silent
-(watchers don't chatter). The Orchestrator then judges materiality.
+Detects competitor moves and posts them to the room @mentioning the Orchestrator.
+Two modes (env MARKET_WATCHER_MODE), both posting as the same "Market Watcher"
+Band identity, send-only over REST (no SDK, no model):
 
-Design notes
-------------
-* Watchers are dumb: detection only, no reasoning. Materiality lives in the
-  Orchestrator, so the watcher just reports what it "sees".
-* Send-only over REST: a REST-only integration can SEND but not RECEIVE; a watcher
-  never needs to listen, so no WebSocket, no SDK, no model.
-* Clock-driven + fire-once: an event for sim-day N fires only when the clock first
-  crosses into day N. The clock persists the current day, so after a restart it
-  resumes at the persisted day and already-fired days are NOT replayed — the
-  watcher's change-detection discipline (only fire on genuinely new).
-* Env-driven, like the other agents; nothing hardcoded.
+* MODE=real (default) — the REAL connector. Polls curated competitor update sources
+  on WALL-CLOCK time and fires on a genuine change. Relevance is inherent: the
+  curated sources ARE the watchlist. It still only DETECTS — raw observation +
+  evidence URL, never severity/recommendation. Materiality is the Orchestrator's job
+  (judged against the watchlist: Typeform major -> likely material; Jotform minor ->
+  likely not).
+    - Typeform "What's New" (major) — page-diff of the dated release region.
+    - Jotform product blog (minor) — RSS seen-set, filtered to the Product category.
+  Events are stamped with the current sim_day (for memory-timeline coherence) but
+  POLLED on real time. Seeds silently on first run; persists seen-set/hashes so it
+  fires once and survives restart with no replay.
 
-Run it (from the project root, AFTER the orchestrator + specialists are up and
-connected — there is no offline mention queue):
+* MODE=scripted — the original sim-clock-driven scripted feed, kept as the on-cue
+  DEMO beat (you can't make a real competitor publish during a 2-minute demo). Run it
+  ALONGSIDE the real one.
 
-    uv run python -m agents.watchers.market_watcher
+Run (from project root):
+    uv run python -m agents.watchers.market_watcher                      # real
+    MARKET_WATCHER_MODE=scripted uv run python -m agents.watchers.market_watcher
 
-Requires in .env:
-    EVERGREEN_ROOM_ID=<the chat room's uuid>
-    MARKET_WATCHER_API_KEY=<the Market Watcher agent's api key>
-    ORCHESTRATOR_NAME=Orchestrator        # display name of the orchestrator in the room
-    SIM_SECONDS_PER_DAY=5                  # real seconds per sim-day (clock config)
-    SIM_START_DAY=1                        # first sim-day (clock config)
-
+Env: EVERGREEN_ROOM_ID, MARKET_WATCHER_API_KEY, ORCHESTRATOR_NAME;
+     real mode: MARKET_POLL_SECONDS (900), MARKET_USER_AGENT, MARKET_STATE_FILE,
+                TYPEFORM_WHATSNEW_URL, JOTFORM_FEED_URL;
+     scripted mode: SIM_SECONDS_PER_DAY, SIM_START_DAY.
 The Market Watcher and the Orchestrator must both be participants in the room.
 """
 
+import hashlib
+import json
 import os
+import re
 import sys
+import time
+import urllib.robotparser
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
+from bs4 import BeautifulSoup
 
-from clock.sim_clock import SimClock
+from clock.sim_clock import SimClock, read_current_day
+from core.events import Event
 
 
-# --------------------------------------------------------------------------- #
-# Config (env-driven). Mirrors the THENVOI_/BAND_ fallback the other agents use.
-# --------------------------------------------------------------------------- #
 def _load_env() -> None:
-    """Load .env without forcing a python-dotenv dependency."""
     try:
         from dotenv import load_dotenv  # type: ignore
         load_dotenv()
@@ -66,61 +69,41 @@ def _load_env() -> None:
 
 _load_env()
 
-REST_URL = os.getenv(
-    "THENVOI_REST_URL", os.getenv("BAND_REST_URL", "https://app.band.ai")
-).rstrip("/")
+REST_URL = os.getenv("THENVOI_REST_URL", os.getenv("BAND_REST_URL", "https://app.band.ai")).rstrip("/")
 API = f"{REST_URL}/api/v1/agent"
-
 WATCHER_API_KEY = os.getenv("MARKET_WATCHER_API_KEY")
 ROOM_ID = os.getenv("EVERGREEN_ROOM_ID")
 ORCH_NAME = os.getenv("ORCHESTRATOR_NAME", "Orchestrator")
 
-
-# --------------------------------------------------------------------------- #
-# The watcher's scheduled feed, keyed by sim-day. Edit freely.
-# Day 3 is a deliberately minor signal (to show the materiality gate ignore it);
-# day 12 is the real competitor move (to trigger convene -> assess -> escalate).
-# --------------------------------------------------------------------------- #
-SCHEDULE: dict[int, tuple[str, str]] = {
-    3: (
-        "market",
-        "A minor competitor, FormFly, pushed a small UI refresh and some "
-        "marketing copy changes this week.",
-    ),
-    12: (
-        "market",
-        "Competitor Typeform just announced a 30% price cut on their Starter "
-        "plan plus a new AI form-building feature.",
-    ),
-}
+MODE = os.getenv("MARKET_WATCHER_MODE", "real").lower()
+POLL_SECONDS = int(os.getenv("MARKET_POLL_SECONDS", "900"))  # real-time cadence
+USER_AGENT = os.getenv(
+    "MARKET_USER_AGENT",
+    "EvergreenMarketWatcher/1.0 (+https://github.com/dineshsai05/Evergreen)",
+)
+STATE_FILE = os.getenv("MARKET_STATE_FILE", "market_watcher_state.json")
 
 
 # --------------------------------------------------------------------------- #
-# Band Agent REST helpers
+# Band Agent REST helpers (shared by both modes)
 # --------------------------------------------------------------------------- #
 def _headers() -> dict[str, str]:
     return {"X-API-Key": WATCHER_API_KEY, "Content-Type": "application/json"}
 
 
 def _data(payload):
-    """Tolerate both {'data': ...} envelopes and bare bodies."""
-    if isinstance(payload, dict) and "data" in payload:
-        return payload["data"]
-    return payload
+    return payload["data"] if isinstance(payload, dict) and "data" in payload else payload
 
 
 def whoami(client: httpx.Client) -> str:
     try:
         r = client.get(f"{API}/me", headers=_headers())
-        if r.status_code == 200:
-            return _data(r.json()).get("name", "?")
-        return f"(status {r.status_code})"
+        return _data(r.json()).get("name", "?") if r.status_code == 200 else f"(status {r.status_code})"
     except Exception as exc:  # noqa: BLE001
         return f"(error: {exc})"
 
 
 def resolve_orchestrator(client: httpx.Client) -> dict | None:
-    """Find the orchestrator in the room's participant list by display name."""
     r = client.get(f"{API}/chats/{ROOM_ID}/participants", headers=_headers())
     r.raise_for_status()
     participants = _data(r.json())
@@ -128,75 +111,247 @@ def resolve_orchestrator(client: httpx.Client) -> dict | None:
         participants = participants.get("data", [])
     for p in participants:
         if str(p.get("name", "")).lower() == ORCH_NAME.lower():
-            return {
-                k: v
-                for k, v in {
-                    "id": p.get("id"),
-                    "handle": p.get("handle"),
-                    "name": p.get("name"),
-                }.items()
-                if v
-            }
+            return {k: v for k, v in {"id": p.get("id"), "handle": p.get("handle"),
+                                      "name": p.get("name")}.items() if v}
     return None
 
 
-def post_signal(client: httpx.Client, orchestrator: dict, text: str, sim_day: int) -> None:
-    # Stamp the sim-day into the (human-readable) content so it's visible in the
-    # transcript / audit trail without relying on message-metadata API specifics.
-    content = f"@{orchestrator['name']} [event from market-watcher · sim-day {sim_day}] {text}"
+def _post(client: httpx.Client, orchestrator: dict, content: str) -> None:
     body = {"message": {"content": content, "mentions": [orchestrator]}}
     r = client.post(f"{API}/chats/{ROOM_ID}/messages", headers=_headers(), json=body)
     r.raise_for_status()
 
 
-# --------------------------------------------------------------------------- #
-# Main loop — clock-driven
+# =========================================================================== #
+# SCRIPTED MODE — the on-cue demo beat (sim-clock driven). Unchanged behaviour.
+# =========================================================================== #
+SCHEDULE: dict[int, tuple[str, str]] = {
+    3: ("market", "A minor competitor, FormFly, pushed a small UI refresh and some "
+                  "marketing copy changes this week."),
+    12: ("market", "Competitor Typeform just announced a 30% price cut on their Starter "
+                   "plan plus a new AI form-building feature."),
+}
+
+
+def run_scripted(client: httpx.Client, orchestrator: dict) -> None:
+    clock = SimClock()
+    print(f"[market/scripted] reporting to {orchestrator['name']}; "
+          f"{clock.seconds_per_day:g}s = 1 sim-day; resuming at day {clock.current_day()}; "
+          f"scheduled days: {sorted(SCHEDULE)}")
+    for day in clock.tick():
+        scheduled = SCHEDULE.get(day)
+        if not scheduled:
+            print(f"[market/scripted] sim-day {day}: all quiet")
+            continue
+        _, text = scheduled
+        content = f"@{orchestrator['name']} [event from market-watcher · sim-day {day}] {text}"
+        print(f"[market/scripted] sim-day {day}: emitting -> {ORCH_NAME}")
+        try:
+            _post(client, orchestrator, content)
+            print("[market/scripted] posted.")
+        except httpx.HTTPStatusError as exc:
+            print(f"[market/scripted] POST failed: {exc.response.status_code} {exc.response.text}")
+
+
+# =========================================================================== #
+# REAL MODE — wall-clock connector over curated competitor sources.
+# =========================================================================== #
+def _sources() -> list[dict]:
+    """Curated competitor sources (the watchlist). URLs env-overridable. The
+    help-center Typeform changelog is WAF-blocked (403); we use the main-domain
+    What's New page, which is fetchable and robots-allowed."""
+    return [
+        {
+            "key": "competitor:typeform", "name": "Typeform", "tier": "major", "type": "page",
+            "url": os.getenv("TYPEFORM_WHATSNEW_URL", "https://www.typeform.com/whats-new"),
+            # isolate the dated release headings; ignores nav/footer/blurb-wording noise
+            "pattern": r"(?:Winter|Spring|Summer|Fall)\s+20\d{2}",
+        },
+        {
+            "key": "competitor:jotform", "name": "Jotform", "tier": "minor", "type": "rss",
+            "url": os.getenv("JOTFORM_FEED_URL", "https://www.jotform.com/blog/feed/"),
+            "category": "Product",
+        },
+    ]
+
+
+def http_fetch(url: str, etag: str | None = None, last_modified: str | None = None) -> dict:
+    """Default fetcher: conditional GET with an identifiable UA. Returns a dict the
+    connector understands. (Injectable so tests can supply fixtures.)"""
+    headers = {"User-Agent": USER_AGENT}
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
+    r = httpx.get(url, headers=headers, timeout=30, follow_redirects=True)
+    return {"status": r.status_code, "text": r.text,
+            "etag": r.headers.get("ETag"), "last_modified": r.headers.get("Last-Modified")}
+
+
+_robots_cache: dict[str, urllib.robotparser.RobotFileParser] = {}
+
+
+def robots_allows(url: str, fetcher=http_fetch) -> bool:
+    """Respect robots.txt for the curated path (good-citizen). Fail-open if robots
+    can't be read (standard practice), logging the reason."""
+    host = urlparse(url)
+    base = f"{host.scheme}://{host.netloc}"
+    rp = _robots_cache.get(base)
+    if rp is None:
+        rp = urllib.robotparser.RobotFileParser()
+        try:
+            res = fetcher(f"{base}/robots.txt")
+            if res["status"] == 200:
+                rp.parse(res["text"].splitlines())
+            else:
+                rp.allow_all = True
+        except Exception as exc:  # noqa: BLE001
+            print(f"[market/real] robots.txt unreadable for {base} ({exc}); allowing")
+            rp.allow_all = True
+        _robots_cache[base] = rp
+    return rp.can_fetch(USER_AGENT, url)
+
+
+def _clean_text(html: str) -> str:
+    """Extract human-readable text, dropping nav/footer/script/style so layout/cookie
+    noise can't trigger a false diff."""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "svg", "form", "button"]):
+        tag.decompose()
+    return re.sub(r"\n{2,}", "\n", soup.get_text("\n")).strip()
+
+
+def _page_entries(src: dict, html: str) -> list[str]:
+    """The 'meaningful update region' for a page source. With a pattern, the set of
+    dated release headings (robust to wording/layout noise); else the cleaned text."""
+    text = _clean_text(html)
+    pat = src.get("pattern")
+    if pat:
+        return sorted(set(re.findall(pat, text)))
+    return [text]  # fallback (e.g. a controlled test page): whole-text diff
+
+
+def parse_rss(xml_text: str) -> list[dict]:
+    """Parse RSS 2.0 with stdlib ElementTree (no feedparser/lxml dependency)."""
+    items = []
+    root = ET.fromstring(xml_text)
+    for item in root.iter("item"):
+        link = (item.findtext("link") or "").strip()
+        guid = (item.findtext("guid") or link).strip()
+        items.append({
+            "id": guid or link,
+            "title": (item.findtext("title") or "").strip(),
+            "link": link,
+            "categories": [(c.text or "").strip() for c in item.findall("category")],
+        })
+    return items
+
+
+def _make_event(src: dict, observation: str, dedup_suffix: str, evidence: list[str]) -> Event:
+    return Event(
+        source=src["key"],
+        signal_type="competitor_update",
+        observation=observation,
+        dedup_key=f"{src['key']}:{dedup_suffix}",
+        sim_day=read_current_day(default=0),
+        evidence=evidence,
+        watcher="market",
+    )
+
+
+def process_source(src: dict, prev: dict, fetcher=http_fetch) -> tuple[list[Event], dict]:
+    """Fetch one source, detect genuine change, return (events, new_state). Pure of
+    transport — `fetcher` is injectable for tests. Seeds silently (no events) on first
+    sight; fires only on subsequent change; returns updated per-source state."""
+    prev = prev or {}
+    res = fetcher(src["url"], prev.get("etag"), prev.get("last_modified"))
+    if res["status"] == 304:  # unchanged since last poll
+        return [], prev
+    if res["status"] != 200:
+        raise RuntimeError(f"HTTP {res['status']} for {src['url']}")
+
+    meta = {"etag": res.get("etag"), "last_modified": res.get("last_modified")}
+    events: list[Event] = []
+
+    if src["type"] == "page":
+        entries = _page_entries(src, res["text"])
+        seeded = prev.get("entries") is not None
+        new_state = {**prev, **meta, "entries": entries}
+        if seeded and entries != prev["entries"]:
+            added = [e for e in entries if e not in prev["entries"]]
+            digest = hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()[:8]
+            obs = f"{src['name']}'s update page changed"
+            if added:
+                obs += f"; new entr{'y' if len(added) == 1 else 'ies'}: {', '.join(added)}"
+            events.append(_make_event(src, obs, digest, [src["url"]]))
+        return events, new_state
+
+    # RSS
+    items = parse_rss(res["text"])
+    cat = src.get("category")
+    if cat:
+        items = [it for it in items if any(cat.lower() == c.lower() for c in it["categories"])]
+    seeded = prev.get("seen") is not None
+    seen = set(prev.get("seen", []))
+    new_state = {**prev, **meta, "seen": list({*seen, *(it["id"] for it in items)})[-500:]}
+    if seeded:
+        for it in items:
+            if it["id"] in seen:
+                continue
+            events.append(_make_event(src, f'{src["name"]} published: "{it["title"]}"',
+                                      it["id"], [it["link"]] if it["link"] else []))
+    return events, new_state
+
+
+def _load_state() -> dict:
+    try:
+        return json.loads(Path(STATE_FILE).read_text())
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def _save_state(state: dict) -> None:
+    Path(STATE_FILE).write_text(json.dumps(state))
+
+
+def run_real(client: httpx.Client, orchestrator: dict, fetcher=http_fetch) -> None:
+    sources = [s for s in _sources() if robots_allows(s["url"], fetcher)]
+    print(f"[market/real] reporting to {orchestrator['name']}; polling every {POLL_SECONDS}s; "
+          f"sources: {[s['key'] for s in sources]}")
+    while True:
+        state = _load_state()
+        for src in sources:
+            try:
+                events, new_state = process_source(src, state.get(src["key"], {}), fetcher)
+            except Exception as exc:  # noqa: BLE001 — a source failing must not crash the room
+                print(f"[market/real] {src['key']}: fetch/parse failed ({exc}); backing off")
+                continue
+            for ev in events:
+                print(f"[market/real] {src['key']}: FIRING competitor_update — {ev.observation}")
+                try:
+                    _post(client, orchestrator, ev.render(orchestrator["name"]))
+                except httpx.HTTPStatusError as exc:
+                    print(f"[market/real] POST failed: {exc.response.status_code} {exc.response.text}")
+            if not events:
+                print(f"[market/real] {src['key']}: no change")
+            state[src["key"]] = new_state
+            _save_state(state)
+        time.sleep(POLL_SECONDS)
+
+
 # --------------------------------------------------------------------------- #
 def main() -> None:
-    missing = [
-        name
-        for name, val in [
-            ("MARKET_WATCHER_API_KEY", WATCHER_API_KEY),
-            ("EVERGREEN_ROOM_ID", ROOM_ID),
-        ]
-        if not val
-    ]
+    missing = [n for n, v in [("MARKET_WATCHER_API_KEY", WATCHER_API_KEY),
+                              ("EVERGREEN_ROOM_ID", ROOM_ID)] if not v]
     if missing:
-        sys.exit(f"[watcher] missing required env: {', '.join(missing)}")
-
-    clock = SimClock()
+        sys.exit(f"[market] missing required env: {', '.join(missing)}")
 
     with httpx.Client(timeout=30) as client:
-        print(f"[watcher] connected as: {whoami(client)}")
-
+        print(f"[market] mode={MODE}; connected as: {whoami(client)}")
         orchestrator = resolve_orchestrator(client)
         if not orchestrator:
-            sys.exit(
-                f"[watcher] could not find '{ORCH_NAME}' among room participants. "
-                "Make sure both the Market Watcher and the Orchestrator are in the room."
-            )
-        print(
-            f"[watcher] reporting to {orchestrator['name']} ({orchestrator['id']}); "
-            f"{clock.seconds_per_day:g}s = 1 sim-day; resuming at day {clock.current_day()}; "
-            f"scheduled days: {sorted(SCHEDULE)}"
-        )
-
-        # tick() resumes after the persisted day, so already-fired days never replay.
-        for day in clock.tick():
-            scheduled = SCHEDULE.get(day)
-            if not scheduled:
-                print(f"[watcher] sim-day {day}: all quiet")
-                continue
-            label, text = scheduled
-            print(f"[watcher] sim-day {day}: emitting '{label}' signal -> {ORCH_NAME}")
-            try:
-                post_signal(client, orchestrator, text, day)
-                print("[watcher] posted.")
-            except httpx.HTTPStatusError as exc:
-                print(
-                    f"[watcher] POST failed: {exc.response.status_code} "
-                    f"{exc.response.text}"
-                )
+            sys.exit(f"[market] could not find '{ORCH_NAME}' among room participants.")
+        (run_scripted if MODE == "scripted" else run_real)(client, orchestrator)
 
 
 if __name__ == "__main__":

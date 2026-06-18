@@ -17,3 +17,4 @@ agent_config.yaml
 evergreen_memory.jsonl
 clock/clock_state.json
 metrics_watcher_state.json
+market_watcher_state.json
