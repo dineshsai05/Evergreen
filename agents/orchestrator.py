@@ -62,7 +62,13 @@ def _write_memory_entry(entry: dict) -> None:
 
 
 @tool
-def record_decision(summary: str, rationale: str, participants: str = "") -> str:
+def record_decision(
+    summary: str,
+    rationale: str,
+    participants: str = "",
+    source: str = "",
+    signal_type: str = "",
+) -> str:
     """Record a material decision to the company's long-term memory so the room
     can explain its reasoning later. Call this for EVERY material decision.
 
@@ -72,6 +78,11 @@ def record_decision(summary: str, rationale: str, participants: str = "") -> str
         rationale: Why this decision was made, and why now.
         participants: Comma-separated list of who was involved
             (e.g. "orchestrator, competitive-analysis, founder").
+        source: If this decision stemmed from a watcher event, the event's source
+            (e.g. "stripe", "market-watcher"). Improves later "why did we flag X?"
+            recall. Leave blank if it did not stem from an event.
+        signal_type: If event-driven, the event's signal_type (e.g. "mrr_drop",
+            "competitor_pricing_change"). Leave blank otherwise.
     """
     entry = {
         "entry_id": str(uuid.uuid4()),
@@ -79,6 +90,8 @@ def record_decision(summary: str, rationale: str, participants: str = "") -> str
         "summary": summary,
         "rationale": rationale,
         "actors": [p.strip() for p in participants.split(",") if p.strip()],
+        "source": source,
+        "signal_type": signal_type,
         "sim_day": read_current_day(default=None),  # best-effort; None if clock not running
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -125,10 +138,18 @@ def _read_memory_entries() -> list[dict]:
     return entries
 
 
+def _entry_text(entry: dict) -> str:
+    """Searchable text for an entry: summary + rationale + event provenance
+    (signal_type/source), so "why did we flag the mrr_drop?" matches on provenance."""
+    return " ".join(
+        str(entry.get(k, "") or "")
+        for k in ("summary", "rationale", "signal_type", "source")
+    )
+
+
 def _score(entry: dict, query_tokens: set[str]) -> int:
-    """Relevance of one entry to the query: keyword overlap on summary+rationale."""
-    text = f"{entry.get('summary', '')} {entry.get('rationale', '')}"
-    return len(query_tokens & _tokens(text))
+    """Relevance of one entry to the query: keyword overlap on its searchable text."""
+    return len(query_tokens & _tokens(_entry_text(entry)))
 
 
 @tool
@@ -156,13 +177,13 @@ def recall_decisions(query: str) -> str:
     # embedding-based _score would replace this keyword gate.
     df: dict[str, int] = {}
     for e in entries:
-        for t in _tokens(f"{e.get('summary', '')} {e.get('rationale', '')}"):
+        for t in _tokens(_entry_text(e)):
             df[t] = df.get(t, 0) + 1
     common_cutoff = max(1, len(entries) // 2)
 
     matches = []
     for e in entries:
-        entry_tokens = _tokens(f"{e.get('summary', '')} {e.get('rationale', '')}")
+        entry_tokens = _tokens(_entry_text(e))
         matched = query_tokens & entry_tokens
         if not matched:
             continue
@@ -181,9 +202,12 @@ def recall_decisions(query: str) -> str:
         sim_day = e.get("sim_day")
         when = f"sim-day {sim_day} · {date}" if sim_day is not None else date
         actors = ", ".join(e.get("actors") or []) or "—"
+        prov = ""
+        if e.get("signal_type") or e.get("source"):
+            prov = f" [event: {e.get('source') or '?'}/{e.get('signal_type') or '?'}]"
         lines.append(
             f"[{when}] {e.get('summary', '').strip()} — "
-            f"{e.get('rationale', '').strip()} (involved: {actors})"
+            f"{e.get('rationale', '').strip()} (involved: {actors}){prov}"
         )
     return "\n".join(lines)
 
@@ -283,6 +307,13 @@ When a watcher @mentions you with an event, run this loop:
         reversible operational items with no strategic or financial weight. If a
         decision could plausibly go either way, treat it as strategic and brief the
         founder instead of staying silent.
+
+RECORDING PROVENANCE: whenever a decision (material OR not material) stemmed from a
+watcher event, pass that event's source and signal_type to record_decision — read
+them from the event's <event>{...}</event> JSON (e.g. source "stripe", signal_type
+"mrr_drop"; or source "market-watcher" for a competitor event). This lets the room
+later answer "why did we flag the MRR drop?" by provenance. Omit them only if the
+decision did not come from an event.
 
 COMMUNICATION DISCIPLINE:
 - Send a message ONLY when it carries new substance: a question to a specialist,
