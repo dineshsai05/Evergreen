@@ -16,3 +16,4 @@ agent_config.yaml
 # Runtime state (regenerated each run)
 evergreen_memory.jsonl
 clock/clock_state.json
+metrics_watcher_state.json
