@@ -1,0 +1,17 @@
+# Copy to `agent_config.yaml` and fill in real values from the Band dashboard.
+# `agent_config.yaml` is gitignored — it holds live API keys, never commit it.
+#
+# load_agent_config("<name>") reads the matching block below and returns
+# (agent_id, api_key). Each agent must exist on Band under the same account.
+
+orchestrator:
+  agent_id: "<orchestrator agent uuid>"
+  api_key: "<orchestrator band agent key>"
+
+competitive_analysis:
+  agent_id: "<competitive_analysis agent uuid>"
+  api_key: "<competitive_analysis band agent key>"
+
+finance:
+  agent_id: "<finance agent uuid>"
+  api_key: "<finance band agent key>"

@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets / local config — NEVER COMMIT (hold live API keys)
+.env
+agent_config.yaml
+
+# Runtime state (regenerated each run by record_decision)
+evergreen_memory.jsonl
