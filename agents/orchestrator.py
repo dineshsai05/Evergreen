@@ -28,6 +28,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 
 from clock.sim_clock import read_current_day
+from core.company_profile import profile_summary
 
 # Band's docs disagree on the import name; try both.
 try:
@@ -293,6 +294,19 @@ Rely only on what watchers and specialists report; never invent facts. If asked
 why a past decision was made, call recall_decisions and answer from what it
 returns.
 """.strip()
+
+# Ground materiality in WHO this company is, not generic startup priors. A lean
+# profile + watchlist summary is prepended so every judgment is made against Quillo
+# and its competitor tiers (major move => more likely material; minor => less).
+CHIEF_OF_STAFF_PROMPT = (
+    "ABOUT THE COMPANY YOU SERVE\n"
+    + profile_summary()
+    + "\nJudge materiality against THIS company and its watchlist: a move by a MAJOR "
+    "competitor, or a company metric breaching its watch thresholds, is far more "
+    "likely to be material than a MINOR-competitor move or routine noise. Ground "
+    "every materiality call in this profile, not generic priors.\n\n"
+    + CHIEF_OF_STAFF_PROMPT
+)
 
 
 async def main():
