@@ -29,8 +29,11 @@ Run from the project root:
 """
 
 import asyncio
+from collections import Counter
 
+from clock.sim_clock import read_current_day
 from core.company_data import CASH, MRR_TRAILING_6MO, PLANS, UNIT_ECONOMICS
+from core.sources.fake_stripe import subscriptions
 
 from agents.specialists._base import run_specialist
 
@@ -87,7 +90,7 @@ def burn_and_runway() -> str:
 
 
 def build_data_snapshot() -> str:
-    """Render the full company data slice as a context block the agent reasons from."""
+    """Render the full (day-0/static) company data slice as a context block."""
     return "\n".join(
         [
             "COMPANY FINANCIAL DATA (authoritative — these are the only figures you may cite):",
@@ -95,6 +98,40 @@ def build_data_snapshot() -> str:
             f"- {revenue_by_plan()}",
             f"- Unit economics: {unit_economics()}",
             f"- {burn_and_runway()}",
+        ]
+    )
+
+
+def build_data_snapshot_as_of(as_of: int) -> str:
+    """Revenue figures derived from the live source AS OF a sim-day (so Finance's
+    numbers match what a metrics watcher reported), with the non-time-varying slices
+    (unit economics, cash) from company_data. Keeps the same authoritative header so
+    the instructions apply unchanged."""
+    counts = Counter(s["plan"] for s in subscriptions.list(as_of=as_of))
+    price = {p["name"]: p["price"] for p in PLANS}
+    per_plan_mrr = {pl: counts[pl] * price[pl] for pl in counts}
+    mrr = sum(per_plan_mrr.values())
+    paying = sum(counts.values())
+    arpu = mrr / paying if paying else 0
+    total = mrr or 1
+    parts = [
+        f"{pl} (${price[pl]}/mo): {counts[pl]:,} customers, ${per_plan_mrr[pl]:,} MRR "
+        f"({per_plan_mrr[pl] / total * 100:.0f}% of MRR)"
+        for pl in ("Starter", "Pro", "Business")
+        if pl in counts
+    ]
+    u, c = UNIT_ECONOMICS, CASH
+    ratio = u["ltv"] / u["cac"]
+    runway = c["cash_balance"] / c["monthly_net_burn"]
+    return "\n".join(
+        [
+            f"COMPANY FINANCIAL DATA (authoritative, as of sim-day {as_of} — the only figures you may cite):",
+            f"- Revenue: MRR ${mrr:,} (ARR ${mrr * 12:,}). ARPU ${arpu:.0f} across {paying:,} paying customers.",
+            "- Revenue by plan — " + "; ".join(parts) + ".",
+            f"- Unit economics: CAC ${u['cac']}, LTV ${u['ltv']} (LTV:CAC {ratio:.1f}:1), "
+            f"gross margin {u['gross_margin_pct']}%, CAC payback {u['cac_payback_months']} months.",
+            f"- Cash: net burn ${c['monthly_net_burn']:,}/mo, cash ${c['cash_balance']:,}, "
+            f"runway ~{runway:.0f} months.",
         ]
     )
 
@@ -109,8 +146,8 @@ number — you read it off the data.
 FINANCE_INSTRUCTIONS = """
 You are the Finance specialist. The Orchestrator convenes you when an event
 raises a financial question (revenue, pricing, churn cost, burn, runway). The
-company's authoritative figures are provided below under "COMPANY FINANCIAL
-DATA" — reason directly from those numbers.
+company's authoritative figures are provided to you under "COMPANY FINANCIAL
+DATA" (current as of the latest sim-day) — reason directly from those numbers.
 
 When the Orchestrator @mentions you, send ONE band_send_message containing a
 SHORT, grounded assessment: quantify the impact using the real figures, then give
@@ -138,7 +175,7 @@ def main() -> None:
             ),
             backstory=FINANCE_BACKSTORY,
             instructions=FINANCE_INSTRUCTIONS,
-            extra_context=build_data_snapshot(),
+            context_provider=lambda: build_data_snapshot_as_of(read_current_day(default=0)),
         )
     )
 

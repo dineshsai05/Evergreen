@@ -34,11 +34,14 @@ SDK version changes them the code degrades gracefully (falls back to the model's
 own mention) rather than crashing.
 """
 
+import dataclasses
 import logging
 import os
 import sys
 
 from dotenv import load_dotenv
+
+from core.company_profile import profile_summary
 
 # Specialist modules run as their own process entry points; configure logging so
 # the agent (and the underlying Band SDK) actually emit to stdout/stderr. Without
@@ -119,10 +122,14 @@ class SpecialistAdapter(CrewAIAdapter):
     """CrewAIAdapter for an Evergreen specialist. Reports only to the
     Orchestrator, deterministically."""
 
-    def __init__(self, *args, report_to_name="Orchestrator", **kwargs):
+    def __init__(self, *args, report_to_name="Orchestrator", context_provider=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._report_to_name = report_to_name
         self._cached_mention = None  # resolved once, reused
+        # Optional per-convene grounded context (e.g. as-of-sim-day figures). When
+        # set, it is recomputed and injected into each incoming message, so a
+        # specialist reflects current reality instead of static startup data.
+        self._context_provider = context_provider
 
     async def resolve_orchestrator_mention(self, tools):
         """Return the mention list that addresses the Orchestrator, or None if it
@@ -170,6 +177,17 @@ class SpecialistAdapter(CrewAIAdapter):
         return None
 
     async def on_message(self, msg, tools, *args, **kwargs):
+        # Inject fresh grounded context (e.g. figures as-of the current sim-day) into
+        # the incoming message so analysis reflects current reality. PlatformMessage
+        # is a frozen dataclass, so we replace it with an updated copy.
+        if self._context_provider is not None:
+            try:
+                fresh = self._context_provider()
+                if fresh:
+                    msg = dataclasses.replace(msg, content=f"{fresh}\n\n{msg.content}")
+                    logger.info("Injected grounded context: %s", fresh.splitlines()[0])
+            except Exception as exc:  # never let grounding break the reply
+                logger.warning("context_provider failed; proceeding without it: %s", exc)
         # Wrap the tools so the band_send_message tool (which calls
         # tools.send_message) always lands on the Orchestrator.
         proxy = _ReportToOrchestratorTools(tools, self)
@@ -179,6 +197,12 @@ class SpecialistAdapter(CrewAIAdapter):
 # --------------------------------------------------------------------------- #
 # Public entry point — a specialist module is just: text + run_specialist(...).
 # --------------------------------------------------------------------------- #
+def _identity_block() -> str:
+    """Company identity grounding injected into EVERY specialist (read from the
+    shared company profile, so analysis is about Quillo, not generic priors)."""
+    return "ABOUT THE COMPANY YOU SERVE\n" + profile_summary()
+
+
 async def run_specialist(
     *,
     config_name,
@@ -187,9 +211,18 @@ async def run_specialist(
     backstory,
     instructions,
     extra_context="",
+    context_provider=None,
     report_to_name="Orchestrator",
 ):
-    """Build and run a specialist agent. Blocks forever on the websocket."""
+    """Build and run a specialist agent. Blocks forever on the websocket.
+
+    extra_context: a STATIC grounded block baked into the prompt at startup (use for
+        non-time-varying data, e.g. Hiring).
+    context_provider: a callable returning a FRESH grounded block, recomputed and
+        injected per convene (use for time-varying data, e.g. Finance/Retention
+        reading figures as-of the current sim-day). Takes precedence over
+        extra_context when set.
+    """
     load_dotenv()
 
     ws_url = os.getenv(
@@ -203,8 +236,10 @@ async def run_specialist(
 
     agent_id, api_key = load_agent_config(config_name)
 
-    custom_section = PLATFORM_NOTE + "\n\n" + instructions
-    if extra_context:
+    # Identity grounding for every specialist; static data baked only when there is
+    # no per-convene provider (the provider injects fresh data per message instead).
+    custom_section = PLATFORM_NOTE + "\n\n" + _identity_block() + "\n\n" + instructions
+    if extra_context and context_provider is None:
         custom_section += "\n\n" + extra_context
 
     adapter = SpecialistAdapter(
@@ -215,6 +250,7 @@ async def run_specialist(
         custom_section=custom_section,
         allow_delegation=False,
         report_to_name=report_to_name,
+        context_provider=context_provider,
     )
 
     agent = Agent.create(
