@@ -100,7 +100,16 @@ Evergreen. 3–5 are bonus.
 
 ---
 
-## STEP 1 — Memory recall (`recall_decisions`)
+## STEP 1 — Memory recall (`recall_decisions`) — ✅ DONE (2026-06-18)
+
+> Shipped in `agents/orchestrator.py`: `recall_decisions(query)` (keyword-overlap +
+> recency, relevance-gated, `_score()` isolated for an embedding swap) + the
+> "ANSWERING THE FOUNDER ABOUT THE PAST" prompt branch (recall + reply via
+> band_send_message, no convene). Verified live in the Band room: positive query →
+> grounded answer; unknown → graceful no-record; 0 specialist convenes. Write-path
+> schema confirmed sufficient (`summary` + `rationale` present); no `record_decision`
+> change needed (a `sim_day` field is deferred to Step 2). Known v1 limit: keyword
+> polysemy (e.g. "hiring plan") — accepted; the model handled it correctly in testing.
 
 **Goal:** the room can answer a founder's "why did we decide X?" (and "why *didn't* we
 act on Y?") months later, grounded in what `record_decision` logged. This completes the

@@ -87,9 +87,12 @@ Key consequences:
 - Loop: judge materiality → convene the right specialist → on reply, stand the
   specialist down → decide (low-risk = record & stay quiet; high-risk = one founder
   brief) → record to memory.
-- Has a `record_decision` custom tool (LangChain `@tool`) that appends JSON lines to
-  `evergreen_memory.jsonl`. A `recall_decisions` tool ("why did we decide X?") is
-  planned but NOT yet built.
+- Two memory tools (LangChain `@tool`): `record_decision` appends JSON lines to
+  `evergreen_memory.jsonl` (write path); `recall_decisions(query)` reads them back to
+  answer a founder's "why did we decide X?" (read path — keyword-overlap + recency,
+  with a relevance gate; scoring isolated in `_score()` for a future embedding swap).
+  A founder *question* is handled as a direct query (recall + reply, no convene), not
+  an event — see the prompt's "ANSWERING THE FOUNDER ABOUT THE PAST" branch.
 
 ### Tier 2 — Watchers (sensors)
 - Mostly idle, by data source: **Market**, **Metrics**, **People & Voice**.
@@ -615,9 +618,9 @@ with a clear **description** (the orchestrator routes by peer description).
 2. **Retention & Hiring specialists** — now trivial: a new module is backstory +
    instructions + `run_specialist(...)` on `agents/specialists/_base.py` (§7). Add a
    data snapshot like Finance if it needs grounded numbers.
-3. **Memory recall tool** — add `recall_decisions` to the orchestrator so it can
-   answer "why did we decide X?" from `evergreen_memory.jsonl` (pairs with the
-   existing `record_decision`). Verify record_decision is actually writing entries.
+3. ~~**Memory recall tool**~~ — DONE (2026-06-18): `recall_decisions` added to the
+   orchestrator; founder "why did we decide X?" answered from `evergreen_memory.jsonl`
+   with no specialist convened. Verified live (positive + graceful no-record).
 4. **Simulated clock / event injector** — make long-running behavior visible
    (the persistence/time pillar). Currently the watcher's tick loop is the stand-in.
 5. **Persistence-across-restart demo** — show the room park and resume with memory
