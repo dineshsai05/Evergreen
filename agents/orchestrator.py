@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -81,6 +82,104 @@ def record_decision(summary: str, rationale: str, participants: str = "") -> str
     logger.info("Recorded decision: %s", summary)
     return f"Decision recorded ({entry['entry_id'][:8]})."
 
+
+# --- Memory READ path. Pairs with record_decision so the room can answer
+# "why did we decide X?" from what it logged. Scoring is isolated in _score so a
+# later swap from keyword-overlap to embeddings is a one-function change. ---
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "to", "of", "in", "on", "for", "with",
+    "we", "us", "our", "you", "it", "this", "that", "these", "those", "is", "are",
+    "was", "were", "be", "been", "do", "does", "did", "didn", "not", "no", "why",
+    "what", "when", "how", "who", "about", "have", "has", "had", "should", "would",
+    "decide", "decided", "decision", "deal", "dealt",
+}
+
+
+def _tokens(text: str) -> set[str]:
+    """Lowercase content words (drop stopwords and 1-2 char noise)."""
+    return {
+        w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(w) > 2 and w not in _STOPWORDS
+    }
+
+
+def _read_memory_entries() -> list[dict]:
+    """Read all decision entries; tolerate blank/malformed lines and a missing file."""
+    entries: list[dict] = []
+    try:
+        with open(MEMORY_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except FileNotFoundError:
+        return []
+    return entries
+
+
+def _score(entry: dict, query_tokens: set[str]) -> int:
+    """Relevance of one entry to the query: keyword overlap on summary+rationale."""
+    text = f"{entry.get('summary', '')} {entry.get('rationale', '')}"
+    return len(query_tokens & _tokens(text))
+
+
+@tool
+def recall_decisions(query: str) -> str:
+    """Search the room's long-term memory for past decisions and the reasoning
+    behind them. Use this to answer a founder's question about the past — "why
+    did we decide X?", "why didn't we act on Y?", "have we dealt with this
+    before?". Pass keyword-rich terms from their question. Returns the most
+    relevant recorded decisions, or a clear no-match message; answer the founder
+    using ONLY what this returns.
+
+    Args:
+        query: The founder's question, or the key terms to search for.
+    """
+    entries = _read_memory_entries()
+    query_tokens = _tokens(query)
+    if not entries or not query_tokens:
+        return "No recorded decision matches that."
+
+    # Relevance gate. Document frequency across the store tells us which words are
+    # common (e.g. "cut" / "price" recur in many Typeform entries) vs distinctive
+    # (e.g. "formfly", "hiring"). A match only counts if it overlaps on >= 2 query
+    # words OR on at least one distinctive word — so a lone common word can't make
+    # an unrelated entry "match" (that was a false positive otherwise). A future
+    # embedding-based _score would replace this keyword gate.
+    df: dict[str, int] = {}
+    for e in entries:
+        for t in _tokens(f"{e.get('summary', '')} {e.get('rationale', '')}"):
+            df[t] = df.get(t, 0) + 1
+    common_cutoff = max(1, len(entries) // 2)
+
+    matches = []
+    for e in entries:
+        entry_tokens = _tokens(f"{e.get('summary', '')} {e.get('rationale', '')}")
+        matched = query_tokens & entry_tokens
+        if not matched:
+            continue
+        distinctive = any(df.get(t, 0) <= common_cutoff for t in matched)
+        if len(matched) >= 2 or distinctive:
+            matches.append((_score(e, query_tokens), e))
+    if not matches:
+        return "No recorded decision matches that."
+    # Best overlap first; break ties by recency (latest timestamp first).
+    matches.sort(key=lambda pair: (pair[0], pair[1].get("timestamp", "")), reverse=True)
+    lines = []
+    for _score_val, e in matches[:5]:
+        date = (e.get("timestamp", "") or "")[:10] or "?"
+        actors = ", ".join(e.get("actors") or []) or "—"
+        lines.append(
+            f"[{date}] {e.get('summary', '').strip()} — "
+            f"{e.get('rationale', '').strip()} (involved: {actors})"
+        )
+    return "\n".join(lines)
+
+
 CHIEF_OF_STAFF_PROMPT = """
 You are the Chief of Staff for a startup. This room owns ONE outcome: keep the
 company healthy and growing. You stay quiet and act only when something material
@@ -101,6 +200,17 @@ this room's history; that de-duplication is the watcher's job, not yours. On
 every event you MUST end your turn with a tool call: record_decision if you
 judge it not material, or the convene path if it is material. Ending your turn
 with no tool call — silent inaction — is never correct.
+
+ANSWERING THE FOUNDER ABOUT THE PAST. If a human (the founder) @mentions you
+asking about past reasoning or decisions — e.g. "why did we decide X?", "what
+did we decide about Y?", "why didn't we act on Z?", "have we dealt with this
+before?" — this is a DIRECT QUESTION, not a new event. Do NOT convene a
+specialist and do NOT treat it as something to escalate. Call recall_decisions
+with the key terms from their question, then reply to the founder in 1-3 plain
+sentences using ONLY what it returns. If it returns nothing, tell them you have
+no record of that decision. Answering a direct question is a reply, so the
+once-per-event Founder Rule does not apply here. (If the founder instead raises a
+genuinely NEW development, handle it as an event through the normal loop below.)
 
 When a watcher @mentions you with an event, run this loop:
 
@@ -166,7 +276,8 @@ COMMUNICATION DISCIPLINE:
 - Keep every message short and human-readable — the transcript is the audit trail.
 
 Rely only on what watchers and specialists report; never invent facts. If asked
-why a past decision was made, answer from what was recorded.
+why a past decision was made, call recall_decisions and answer from what it
+returns.
 """.strip()
 
 
@@ -186,7 +297,7 @@ async def main():
     adapter = LangGraphAdapter(
         llm=llm,
         checkpointer=InMemorySaver(),
-        additional_tools=[record_decision],
+        additional_tools=[record_decision, recall_decisions],
         custom_section=CHIEF_OF_STAFF_PROMPT,
     )
 
