@@ -107,9 +107,10 @@ Key consequences:
 ### Tier 3 — Specialists (analysts)
 - Convened on demand by the orchestrator. Framework: **CrewAI**. Model: gpt-4o-mini
   (cheaper) for the persona-style ones.
-- **Built & working:** Competitive Analysis (persona) and Finance (pre-fetched data).
-- **Built, pending Band agents:** Retention and Hiring (grounded, pre-fetched).
-- All four on the shared `agents/specialists/_base.py` (forced recipient + prompt fix, §7).
+- **Built & working (all four):** Competitive Analysis (persona), Finance, Retention,
+  and Hiring (the latter three grounded/pre-fetched), all on the shared
+  `agents/specialists/_base.py` (forced recipient + prompt fix, §7). Fan-out across
+  the four verified live.
 
 ### Humans & infrastructure
 - Founder (and function heads) are **participants, not agents**. The founder is the
@@ -466,18 +467,22 @@ brief ("MRR drop … ~$15,295 … lose ~$6,555/mo", Starter = 45% of MRR). Trade
 the old tooled version: no per-tool audit events and no dynamic tool selection — for
 four cheap internal slices, worth it for guaranteed delivery.
 
-### Retention (`agents/specialists/retention.py`) — code complete (pending Band agent)
+### Retention (`agents/specialists/retention.py`) — WORKS
 Same grounded pattern as Finance. `build_retention_snapshot()` pre-fetches the
 `RETENTION` slice (logo/revenue churn, NRR/GRR, per-plan churn, trailing trend,
 at-risk accounts; Starter is the at-risk cohort, ~$983/mo at risk derived from
 PLANS). Four-part output: what's happening / severity / who's exposed / one play.
+Verified live (churn-spike → grounded "1,150 Starter / $21,850 MRR at risk" reply).
 
-### Hiring (`agents/specialists/hiring.py`) — code complete (pending Band agent)
+### Hiring (`agents/specialists/hiring.py`) — WORKS
 Same pattern. `build_hiring_snapshot()` pre-fetches the `HIRING` slice (headcount
 plan vs actual, attrition, time-to-fill, open reqs with pipeline). Four-part output.
+Verified live (departure → grounded "role open 52d, pipeline 40→1, Eng gap" reply).
 
-> Retention & Hiring are unit-verified (snapshots, adapters, routing) but need their
-> Band agents created + keys in `agent_config.yaml` before a live run (§11.2).
+> Fan-out across the 4-specialist pool verified live (churn → Retention+Finance;
+> departure → Hiring+Finance); each stood down, one founder brief per event. Nuance:
+> Finance's slice is revenue-only, so on a pure departure its reply is tangential —
+> candidate refinement: Hiring-only routing for departures, or a payroll slice.
 
 ### Shared mock data (`core/company_data.py`)
 The "company profile" all specialists read. A fictional SaaS form-builder, internally
@@ -643,10 +648,9 @@ with a clear **description** (the orchestrator routes by peer description).
 
 1. ~~**Fix Finance delivery** (§8)~~ — DONE (2026-06-18): pre-fetch data + drop tools,
    plus the shared `_base.py` forced-recipient/prompt-suppression layer. Verified live.
-2. **Retention & Hiring specialists** — CODE DONE (2026-06-18): both built grounded
-   on `_base.py` with `core/company_data.py` slices + routing/fan-out (§7). PENDING:
-   create the two Band agents (clear descriptions), add keys to `agent_config.yaml`,
-   then live-verify (churn-spike → Retention[+Finance]; departure → Hiring).
+2. ~~**Retention & Hiring specialists**~~ — DONE (2026-06-18): both built grounded on
+   `_base.py` with `core/company_data.py` slices + routing/fan-out (§7). Verified live
+   (churn → Retention+Finance; departure → Hiring+Finance; each stood down, one brief).
 3. ~~**Memory recall tool**~~ — DONE (2026-06-18): `recall_decisions` added to the
    orchestrator; founder "why did we decide X?" answered from `evergreen_memory.jsonl`
    with no specialist convened. Verified live (positive + graceful no-record).
