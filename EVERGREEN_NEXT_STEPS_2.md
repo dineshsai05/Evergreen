@@ -1,5 +1,15 @@
 # Evergreen — Next Steps v2: The Fake Company Workstream (build plan for Claude Code)
 
+> ## ✅ STATUS: COMPLETE (2026-06-19) — Build Steps A–G all shipped & verified live.
+> A profile + orchestrator grounding · B in-process fake Stripe (deterministic,
+> planted day-12 churn) · C event contract + real Metrics watcher (derives MRR, no
+> judgment) · D wall-time-anchored clock (shared rate) · E specialist coherence
+> (identity + as-of figures) · F memory provenance · G end-to-end proof in a hosted
+> room (quiet days → day-12 churn cascade → as-of grounded brief to the founder →
+> decision recorded with provenance → restart with no replay → cross-process recall).
+> Plus: orchestrator briefs only the human founder; dedicated Metrics Watcher identity.
+> Reset `evergreen_memory.jsonl` before a clean demo (it holds test-run decisions).
+
 > **Read order:** `EVERGREEN_CONTEXT.md` (current state + Band facts) →
 > `EVERGREEN_NEXT_STEPS.md` **§A (how to work)** → `EVERGREEN_FAKE_COMPANY.md` (the
 > component designs + the proposed company identity) → this file (the **ordered,

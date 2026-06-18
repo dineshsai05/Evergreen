@@ -126,8 +126,29 @@ Orchestrator + Competitive Analysis + Market Watcher.
 
 ## 3. Current state (what works, what doesn't)
 
-**Working, verified end-to-end in a Band room (2026-06-18 live run, room
-`ea9b566e…`, logs + memory captured):**
+**REAL DETECTION LOOP — verified end-to-end live (2026-06-19, hosted room
+`078d8912…`).** The company is now a real, queryable, time-varying thing (the Fake
+Company workstream, A–G), so the upstream tiers genuinely reason instead of being
+spoon-fed:
+- **Company profile** (`core/company_profile.py`): Quillo identity + tiered watchlist
+  (Typeform major; FormFly/Jotform/Google Forms/Tally minor), read by all tiers; the
+  orchestrator judges materiality against it (major move → material; minor → not).
+- **In-process fake Stripe** (`core/sources/fake_stripe.py`): SDK-shaped `as_of`
+  accessors over a deterministic timeline (seeded), anchored on the day-0 figures,
+  with a planted ~300-Starter churn on sim-day 12 (≈ −12% MRR). Swap the backing
+  layer for real Stripe without touching the watcher.
+- **Real Metrics watcher** (`agents/watchers/metrics_watcher.py`): each sim-day it
+  pulls subscriptions, **derives MRR itself**, baselines it, and fires `mrr_drop`
+  only on a genuine breach (%Δ-vs-trailing-mean + z-score, min-stddev floor) — raw
+  magnitude only, never a verdict. Emits the structured event contract (`core/events.py`).
+- **Live proof:** quiet days → day-12 churn → watcher derives & fires → orchestrator
+  convenes Finance + Retention → both reason from **as-of-day-12** figures (matching
+  the watcher) → ONE brief to the human founder → decision recorded with provenance
+  (`source:stripe/signal_type:mrr_drop`, sim_day 12) → full restart resumed with NO
+  replay → a fresh orchestrator answered "why did we flag the MRR drop?" from memory,
+  no convene.
+
+**Earlier cascade behaviour, also verified (2026-06-18, room `ea9b566e…`):**
 - Orchestrator connects, judges materiality correctly — a minor FormFly UI-refresh
   event was recorded "not material" with `actors:['orchestrator']` only (no convene,
   no founder ping).
@@ -582,19 +603,25 @@ major SDK bump). Re-verify both after any `band-sdk` upgrade.
 ```
 evergreen/
   agents/
-    orchestrator.py                     # LangGraph, gpt-4o, record_decision tool
+    orchestrator.py                     # LangGraph, gpt-4o; record_decision + recall_decisions
     specialists/
-      _base.py                          # shared base: forced recipient + prompt fix (§5/§7)
-      competitive_analysis.py           # CrewAI persona on _base (works)
-      finance.py                        # CrewAI pre-fetched data on _base (works — §8)
+      _base.py                          # shared base: forced recipient, prompt fix, identity + as-of injection
+      competitive_analysis.py           # CrewAI persona on _base
+      finance.py                        # grounded, as-of figures from fake_stripe
+      retention.py                      # grounded, as-of figures from fake_stripe
+      hiring.py                         # grounded (static slice)
     watchers/
-      market_watcher.py                 # REST, send-only; clock-driven SCHEDULE (§Step 2)
+      market_watcher.py                 # REST, send-only; clock-driven SCHEDULE (external/competitor)
+      metrics_watcher.py                # REST; clock-driven; derives MRR, real detection (internal)
   core/
-    company_data.py                     # shared mock "company profile"
-    (llm.py / memory.py / events.py)    # scaffolding, mostly empty
+    company_data.py                     # the day-0 financial seed (numbers)
+    company_profile.py                  # IDENTITY + watchlist (read by all tiers)
+    events.py                           # Event contract emitted by watchers
+    sources/
+      fake_stripe.py                    # in-process, as_of-parameterized deterministic source
   clock/
-    sim_clock.py                        # SimClock: real secs -> sim-days, persisted
-    clock_state.json                    # persisted sim-day (gitignored, runtime state)
+    sim_clock.py                        # wall-time-anchored sim-days; shared anchor (§Step D)
+    clock_state.json                    # persisted anchor (gitignored, runtime state)
   .env                                  # see §4
   agent_config.yaml                     # per-agent {agent_id, api_key}
   evergreen_memory.jsonl                # memory store (written by record_decision)
