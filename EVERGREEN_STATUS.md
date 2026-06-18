@@ -34,7 +34,12 @@ breadth/polish and the real-watcher upgrade.
   `as_of` fake Stripe (deterministic, planted day-12 churn); **real Metrics watcher**
   that derives MRR itself and fires `mrr_drop` only on a genuine breach (no judgment);
   event contract (`core/events.py`); clock-as-driver; specialist as-of coherence.
-- Market watcher (scripted external feed) remains for competitor events.
+- **Real Market watcher** (`MODE=real`, wall-clock): polls curated REAL competitor
+  sources — Typeform "What's New" (page-diff, bs4) + Jotform product feed (RSS,
+  Product category) — fires once on genuine change, robots-respecting, fail-soft,
+  emits the event contract with an evidence URL; detection-only (no verdict). The
+  scripted feed (`MODE=scripted`) stays as the on-cue demo beat; both run alongside.
+  Verified: unit + live seed against the real pages (HTTP 200, robots-allowed).
 - Two distinct watcher identities on Band (Market = external, Metrics = internal).
 
 **Pillar 3 — Institutional memory**
@@ -50,19 +55,21 @@ breadth/polish and the real-watcher upgrade.
 
 ## 🔜 Remaining
 
-**ACTIVE NEXT — Real watchers** (design: `EVERGREEN_WATCHERS.md`)
-- **Market watcher on REAL external sources** — the one that maps cleanly to a fictional
-  company, because the *competitors are real* (Typeform, Jotform, Google Forms, Tally).
-  Build: connector (news API / RSS / competitor page-diff) → change-detection/dedup →
-  relevance gate (keyword/watchlist or LLM) → emit the existing event contract. Decisions
-  pending: which source first, and deterministic vs LLM relevance gate.
+**Real Market watcher — DONE** (Typeform page-diff + Jotform RSS; design:
+`EVERGREEN_MARKET_WATCHER.md`). Remaining bits:
+- **Pending: live cascade test** — a *detected* change (controlled page, since we can't
+  make a competitor publish on cue) → orchestrator judges materiality against the
+  watchlist (Typeform major → material → convene; Jotform minor → not) → grounded brief.
+  (Unit + live-seed already pass; this is the with-agents leg.)
+- **Deferred more sources:** Google Forms & Tally "what's-new" pages (verify each first);
+  pricing-page diffing for the `competitor_pricing_change` signal (JS-rendered/noisy).
 - (Metrics is already "real" via its source — real Stripe is a one-line backing swap if
   ever there's a real account. People & Voice needs real customer data a fictional
   company lacks — deferred.)
 
-**Soon / when a 2nd real watcher exists**
-- **Watcher framework** (a `_base` for watchers) — scheduling, state, dedup, relevance,
-  emit, logging — so new watchers are cheap (like `_base.py` did for specialists).
+**Soon / when a 3rd real watcher exists**
+- **Watcher framework** (a `_base` for watchers) — scheduling, state, dedup, emit,
+  logging — extract from Metrics + Market once a third would pay off (YAGNI until then).
 
 **Deferred (out of current scope)**
 - Push/webhook ingestion (Stripe/Slack), real wall-clock scheduler for production.
