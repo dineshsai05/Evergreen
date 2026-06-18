@@ -2,44 +2,46 @@
 Market Watcher  --  Evergreen
 =============================
 
-A standing, LLM-free detector. It is the autonomous event source that replaces
-you hand-posting events into the room.
-
-On each simulated-day tick it pulls the next signal from its feed and posts it
-into the Evergreen room, @mentioning the Orchestrator. The Orchestrator then
-judges materiality (noise -> ignored; material -> convene a specialist, etc.).
+A standing, LLM-free detector and the autonomous event source for the room. It is
+driven by the simulated clock (`clock/sim_clock.py`): on each new sim-day it checks
+its SCHEDULE and, if a signal is due that day, POSTs it into the Evergreen room
+@mentioning the Orchestrator. On days with nothing scheduled it stays silent
+(watchers don't chatter). The Orchestrator then judges materiality.
 
 Design notes
 ------------
 * Watchers are dumb: detection only, no reasoning. Materiality lives in the
   Orchestrator, so the watcher just reports what it "sees".
-* Send-only: Band's docs confirm a REST-only integration can SEND commands but
-  cannot RECEIVE. A watcher never needs to listen, so it needs no WebSocket,
-  no SDK, and no model -- just the Agent REST API.
-* Env-driven, like the other agents, so nothing is hardcoded.
+* Send-only over REST: a REST-only integration can SEND but not RECEIVE; a watcher
+  never needs to listen, so no WebSocket, no SDK, no model.
+* Clock-driven + fire-once: an event for sim-day N fires only when the clock first
+  crosses into day N. The clock persists the current day, so after a restart it
+  resumes at the persisted day and already-fired days are NOT replayed — the
+  watcher's change-detection discipline (only fire on genuinely new).
+* Env-driven, like the other agents; nothing hardcoded.
 
-Run it (from the project root, with the orchestrator + specialist already up in
-their own terminals):
+Run it (from the project root, AFTER the orchestrator + specialists are up and
+connected — there is no offline mention queue):
 
-    uv run python agents/watchers/market_watcher.py
+    uv run python -m agents.watchers.market_watcher
 
-Requires these in .env:
-
+Requires in .env:
     EVERGREEN_ROOM_ID=<the chat room's uuid>
     MARKET_WATCHER_API_KEY=<the Market Watcher agent's api key>
     ORCHESTRATOR_NAME=Orchestrator        # display name of the orchestrator in the room
-    WATCHER_TICK_SECONDS=20               # 1 simulated "day" = 20 real seconds
+    SIM_SECONDS_PER_DAY=5                  # real seconds per sim-day (clock config)
+    SIM_START_DAY=1                        # first sim-day (clock config)
 
-The Market Watcher must be created on Band (a sibling agent under your account)
-and added to the room as a participant before running this.
+The Market Watcher and the Orchestrator must both be participants in the room.
 """
 
 import os
 import sys
-import time
 from pathlib import Path
 
 import httpx
+
+from clock.sim_clock import SimClock
 
 
 # --------------------------------------------------------------------------- #
@@ -72,27 +74,25 @@ API = f"{REST_URL}/api/v1/agent"
 WATCHER_API_KEY = os.getenv("MARKET_WATCHER_API_KEY")
 ROOM_ID = os.getenv("EVERGREEN_ROOM_ID")
 ORCH_NAME = os.getenv("ORCHESTRATOR_NAME", "Orchestrator")
-TICK_SECONDS = int(os.getenv("WATCHER_TICK_SECONDS", "20"))
 
 
 # --------------------------------------------------------------------------- #
-# The watcher's scripted feed.
-# Edit freely. The Orchestrator decides which of these matter -- the first is
-# deliberately minor (to show the materiality gate ignore it), the second is the
-# real competitor move (to trigger the convene -> assess -> escalate cascade).
+# The watcher's scheduled feed, keyed by sim-day. Edit freely.
+# Day 3 is a deliberately minor signal (to show the materiality gate ignore it);
+# day 12 is the real competitor move (to trigger convene -> assess -> escalate).
 # --------------------------------------------------------------------------- #
-FEED: list[tuple[str, str]] = [
-    (
+SCHEDULE: dict[int, tuple[str, str]] = {
+    3: (
         "market",
         "A minor competitor, FormFly, pushed a small UI refresh and some "
         "marketing copy changes this week.",
     ),
-    (
+    12: (
         "market",
         "Competitor Typeform just announced a 30% price cut on their Starter "
         "plan plus a new AI form-building feature.",
     ),
-]
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -124,7 +124,7 @@ def resolve_orchestrator(client: httpx.Client) -> dict | None:
     r = client.get(f"{API}/chats/{ROOM_ID}/participants", headers=_headers())
     r.raise_for_status()
     participants = _data(r.json())
-    if isinstance(participants, dict):  # in case it's {'data': [...]} nested oddly
+    if isinstance(participants, dict):
         participants = participants.get("data", [])
     for p in participants:
         if str(p.get("name", "")).lower() == ORCH_NAME.lower():
@@ -140,15 +140,17 @@ def resolve_orchestrator(client: httpx.Client) -> dict | None:
     return None
 
 
-def post_signal(client: httpx.Client, orchestrator: dict, text: str) -> None:
-    content = f"@{orchestrator['name']} [event from market-watcher] {text}"
+def post_signal(client: httpx.Client, orchestrator: dict, text: str, sim_day: int) -> None:
+    # Stamp the sim-day into the (human-readable) content so it's visible in the
+    # transcript / audit trail without relying on message-metadata API specifics.
+    content = f"@{orchestrator['name']} [event from market-watcher · sim-day {sim_day}] {text}"
     body = {"message": {"content": content, "mentions": [orchestrator]}}
     r = client.post(f"{API}/chats/{ROOM_ID}/messages", headers=_headers(), json=body)
     r.raise_for_status()
 
 
 # --------------------------------------------------------------------------- #
-# Main loop
+# Main loop — clock-driven
 # --------------------------------------------------------------------------- #
 def main() -> None:
     missing = [
@@ -162,6 +164,8 @@ def main() -> None:
     if missing:
         sys.exit(f"[watcher] missing required env: {', '.join(missing)}")
 
+    clock = SimClock()
+
     with httpx.Client(timeout=30) as client:
         print(f"[watcher] connected as: {whoami(client)}")
 
@@ -169,35 +173,30 @@ def main() -> None:
         if not orchestrator:
             sys.exit(
                 f"[watcher] could not find '{ORCH_NAME}' among room participants. "
-                "Make sure both the Market Watcher and the Orchestrator are added "
-                "to the room."
+                "Make sure both the Market Watcher and the Orchestrator are in the room."
             )
         print(
-            f"[watcher] reporting to {orchestrator['name']} "
-            f"({orchestrator['id']}); 1 day = {TICK_SECONDS}s"
+            f"[watcher] reporting to {orchestrator['name']} ({orchestrator['id']}); "
+            f"{clock.seconds_per_day:g}s = 1 sim-day; resuming at day {clock.current_day()}; "
+            f"scheduled days: {sorted(SCHEDULE)}"
         )
 
-        day = 0
-        for label, text in FEED:
-            day += 1
-            print(f"[watcher] --- simulated day {day}: waiting {TICK_SECONDS}s ---")
-            time.sleep(TICK_SECONDS)
-            print(f"[watcher] day {day}: emitting '{label}' signal -> {ORCH_NAME}")
+        # tick() resumes after the persisted day, so already-fired days never replay.
+        for day in clock.tick():
+            scheduled = SCHEDULE.get(day)
+            if not scheduled:
+                print(f"[watcher] sim-day {day}: all quiet")
+                continue
+            label, text = scheduled
+            print(f"[watcher] sim-day {day}: emitting '{label}' signal -> {ORCH_NAME}")
             try:
-                post_signal(client, orchestrator, text)
+                post_signal(client, orchestrator, text, day)
                 print("[watcher] posted.")
             except httpx.HTTPStatusError as exc:
                 print(
                     f"[watcher] POST failed: {exc.response.status_code} "
                     f"{exc.response.text}"
                 )
-
-        print("[watcher] feed exhausted; standing by (Ctrl-C to stop).")
-        try:
-            while True:
-                time.sleep(60)
-        except KeyboardInterrupt:
-            print("\n[watcher] stopped.")
 
 
 if __name__ == "__main__":

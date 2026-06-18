@@ -13,5 +13,6 @@ wheels/
 .env
 agent_config.yaml
 
-# Runtime state (regenerated each run by record_decision)
+# Runtime state (regenerated each run)
 evergreen_memory.jsonl
+clock/clock_state.json

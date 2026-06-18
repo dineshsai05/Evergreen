@@ -27,6 +27,8 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 
+from clock.sim_clock import read_current_day
+
 # Band's docs disagree on the import name; try both.
 try:
     from thenvoi import Agent
@@ -76,6 +78,7 @@ def record_decision(summary: str, rationale: str, participants: str = "") -> str
         "summary": summary,
         "rationale": rationale,
         "actors": [p.strip() for p in participants.split(",") if p.strip()],
+        "sim_day": read_current_day(default=None),  # best-effort; None if clock not running
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     _write_memory_entry(entry)
@@ -174,9 +177,11 @@ def recall_decisions(query: str) -> str:
     lines = []
     for _score_val, e in matches[:5]:
         date = (e.get("timestamp", "") or "")[:10] or "?"
+        sim_day = e.get("sim_day")
+        when = f"sim-day {sim_day} · {date}" if sim_day is not None else date
         actors = ", ".join(e.get("actors") or []) or "—"
         lines.append(
-            f"[{date}] {e.get('summary', '').strip()} — "
+            f"[{when}] {e.get('summary', '').strip()} — "
             f"{e.get('rationale', '').strip()} (involved: {actors})"
         )
     return "\n".join(lines)
