@@ -10,6 +10,9 @@ inverts that. You don't give it a task; you give it an **outcome to own**.
 Locked use case: a **Startup Operating System** ("chief-of-staff"). The room owns one
 outcome — *keep the company healthy and growing* — and runs indefinitely.
 
+**📊 [Presentation deck (PDF)](./Evergreendeck.pdf)** · Built on **Band** (coordination) +
+**LangGraph** + **CrewAI** + **AI/ML API** · MIT-licensed.
+
 ## The three pillars
 
 Evergreen is defined by three non-negotiable properties:
@@ -171,3 +174,11 @@ EVERGREEN_NEXT.md                 # roadmap + working principles
 [Band](https://band.ai) (coordination) · [LangGraph](https://www.langchain.com/langgraph)
 (orchestrator) · [CrewAI](https://www.crewai.com/) (specialists) ·
 [AI/ML API](https://aimlapi.com) (reasoning) · Python 3.13 · uv.
+
+## Presentation
+
+The pitch deck is in the repo: **[`Evergreendeck.pdf`](./Evergreendeck.pdf)**.
+
+## License
+
+[MIT](./LICENSE) © 2026 Dinesh Sai Rayapati.
